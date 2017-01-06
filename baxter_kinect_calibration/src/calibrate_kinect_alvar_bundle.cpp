@@ -39,6 +39,8 @@
 #include <fstream>
 #include <iostream>
 
+#include <std_srvs/Empty.h>
+
 #define MAIN_MARKER 1
 #define VISIBLE_MARKER 2
 #define GHOST_MARKER 3
@@ -96,6 +98,15 @@ std::deque<tf::Transform> kinectTransforms;
 tf::Transform kinectTransform;
 std::deque<std::deque<tf::Transform> > camTransforms;
 std::vector<tf::Transform> camTransform;
+
+// True while the point cloud is being processed
+volatile bool pointCloudCallbackIsWorking = false;
+// True while the camera image is being processed
+volatile bool cameraCallbackIsWorking = false;
+
+// True when the point cloud & camera image should be processed.
+// False when the data is ignored.
+volatile bool callbacksEnabled = false;
 
 
 bool isCornerNaN(const ARPoint &point)
@@ -497,6 +508,15 @@ void getCapCallback (const sensor_msgs::ImageConstPtr & image_msg)
   }
 }
 
+void getCapCallbackWithMonitor (const sensor_msgs::ImageConstPtr & image_msg)
+{
+	cameraCallbackIsWorking = true;
+	if (callbacksEnabled) {
+		getCapCallback(image_msg);
+	}
+	cameraCallbackIsWorking = false;
+}
+
 //Callback to handle getting kinect point clouds and processing them
 void getPointCloudCallback (const sensor_msgs::PointCloud2ConstPtr &msg)
 {
@@ -571,6 +591,15 @@ void getPointCloudCallback (const sensor_msgs::PointCloud2ConstPtr &msg)
       broadcastTransform(false, kinectBaseLinkFrameID, id, kinectTransform);
     }  
   }
+}
+
+void getPointCloudCallbackWithMonitor (const sensor_msgs::PointCloud2ConstPtr &msg)
+{
+	pointCloudCallbackIsWorking = true;
+	if (callbacksEnabled) {
+		getPointCloudCallback(msg);
+	}
+	pointCloudCallbackIsWorking = false;
 }
 
 
@@ -666,6 +695,44 @@ int calcAndSaveMasterCoords(MultiMarkerBundle &master)
   return 0;
 }
 
+bool enableCallbacks(std_srvs::Empty::Request &req, std_srvs::Empty::Response &res)
+{
+	callbacksEnabled = true;
+	ROS_INFO("Callbacks enabled!");
+	return true;
+}
+
+bool disableCallbacks(std_srvs::Empty::Request &req, std_srvs::Empty::Response &res)
+{
+	callbacksEnabled = false;
+	while (pointCloudCallbackIsWorking || cameraCallbackIsWorking) {
+		ros::Duration(0.2).sleep();
+	}
+	ROS_INFO("Callbacks disabled!");
+	return true;
+}
+
+bool resetFiltersAndAverages(std_srvs::Empty::Request &req, std_srvs::Empty::Response &res)
+{
+	if (callbacksEnabled || pointCloudCallbackIsWorking || cameraCallbackIsWorking) {
+		ROS_WARN("Something is working while resetting the filters and averages.");
+	}
+	for (int i = 0; i < n_bundles; i++) {
+		delete med_filts[i];
+		med_filts[i] = new ata::MedianFilter(med_filt_size);
+	}
+
+	marker_detector.TrackMarkersReset();
+	kinect_marker_detector.TrackMarkersReset();
+
+	camTransforms.clear();
+	kinectTransforms.clear();
+
+	ROS_INFO("The filters and averages have been resetted.");
+
+	return true;
+}
+
 
 int main(int argc, char *argv[])
 {
@@ -745,12 +812,16 @@ int main(int argc, char *argv[])
    
   //Subscribe to topics and set up callbacks
   ROS_INFO_STREAM ("Subscribing to kinect image topic '" << kinectImageTopic << "'");
-  cloud_sub_ = n.subscribe(kinectImageTopic, 1, &getPointCloudCallback);
+  cloud_sub_ = n.subscribe(kinectImageTopic, 1, &getPointCloudCallbackWithMonitor);
 
   image_transport::ImageTransport it_(n);
 //Subscribe to topics and set up callbacks
   ROS_INFO_STREAM ("Subscribing to calibrated image topic '" << calibratedImageTopic << "'");
-  calibratedSub_ = it_.subscribe(calibratedImageTopic, 1, &getCapCallback);
+  calibratedSub_ = it_.subscribe(calibratedImageTopic, 1, &getCapCallbackWithMonitor);
+
+  ros::ServiceServer enableCallbacksService = n.advertiseService("kinect_calibration_enable", enableCallbacks);
+  ros::ServiceServer disableCallbacksService = n.advertiseService("kinect_calibration_disable", disableCallbacks);
+  ros::ServiceServer resetFiltersAndAverageService = n.advertiseService("kinect_calibration_reset", resetFiltersAndAverages);
 
   ros::spin();
 
