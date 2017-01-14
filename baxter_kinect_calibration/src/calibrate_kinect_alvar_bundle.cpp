@@ -260,10 +260,14 @@ void GetMultiMarkerPoses(IplImage *image, ARCloud &cloud) {
   }
 }
 
-void broadcastTransform(bool calibrated, std::string sensorFrame, int id, tf::Transform t)
+void broadcastTransform(bool calibrated, std::string sensorFrame, int id, tf::Transform t, bool kinect)
 {
   std::stringstream out;
   out << "ar_marker_" << id;
+  if (kinect)
+  {
+	  out << "_kinect";
+  }
   std::string markerFrame = out.str();
 
   std::string parentFrame = (calibrated) ? sensorFrame : markerFrame;
@@ -502,7 +506,7 @@ void getCapCallback (const sensor_msgs::ImageConstPtr & image_msg)
       if (!isIdentityTransform(markerPose))
       {
         addTransformToAverage(markerPose, camTransforms[i], camTransform[i]);
-        broadcastTransform(true, calibratedFrameID.c_str(), id, camTransform[i]);
+        broadcastTransform(true, calibratedFrameID.c_str(), id, camTransform[i], false);
       }     
     }
   }
@@ -587,8 +591,8 @@ void getPointCloudCallback (const sensor_msgs::PointCloud2ConstPtr &msg)
     tf::Transform linkToMarker = camBaseTransform * markerPose;
     if (!isIdentityTransform(markerPose))
     {
-      addTransformToAverage(linkToMarker.inverse(), kinectTransforms, kinectTransform);
-      broadcastTransform(false, kinectBaseLinkFrameID, id, kinectTransform);
+      addTransformToAverage(linkToMarker, kinectTransforms, kinectTransform);
+      broadcastTransform(true, kinectBaseLinkFrameID, id, kinectTransform, true);
     }  
   }
 }
