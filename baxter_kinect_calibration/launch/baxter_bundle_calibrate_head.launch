@@ -5,7 +5,7 @@
 	<arg name="max_track_error" default="0.2" />
 
 	<arg name="kinect_image_topic" default="/camera/depth_registered/points" />
-	<arg name="kinect_info_topic" default="/camera/depth_registered/camera_info" />		
+	<arg name="kinect_info_topic" default="/camera/rgb/camera_info" />		
 	<arg name="kinect_base_frame" default="/camera_link" />
 
 	<arg name="calibrated_image_topic" default="/cameras/head_camera/image" />
