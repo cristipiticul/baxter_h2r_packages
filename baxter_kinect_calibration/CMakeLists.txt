@@ -74,6 +74,10 @@ add_executable(bundle_calibrate src/calibrate_kinect_alvar_bundle.cpp)
 target_link_libraries(bundle_calibrate ar_track_alvar kinect_filtering medianFilter ${catkin_LIBRARIES})
 add_dependencies(bundle_calibrate ${PROJECT_NAME}_gencpp ${GENCPP_DEPS})
 
+add_executable(calibrate_rgb_only src/calibrate_rgb_only.cpp)
+target_link_libraries(calibrate_rgb_only ar_track_alvar kinect_filtering medianFilter ${catkin_LIBRARIES})
+add_dependencies(calibrate_rgb_only ${PROJECT_NAME}_gencpp ${GENCPP_DEPS})
+
 set(CALIBRATION_TARGETS bundle_calibrate)
 
 install(TARGETS ${CALIBRATION_TARGETS}
