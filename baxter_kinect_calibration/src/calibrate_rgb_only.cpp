@@ -37,32 +37,54 @@ volatile bool noncalibratedCameraDetectionDone = false;
 
 void calibratedCameraCallback(const sensor_msgs::ImageConstPtr & image_msg);
 void noncalibratedCameraCallback(const sensor_msgs::ImageConstPtr & image_msg);
-void GetMultiMarkerPoses(IplImage *image);
 tf::Transform getTransformFromPose(alvar::Pose &p);
-bool getTransformFromListener(const char from[], const char to[], tf::StampedTransform &result);
+bool getTransformFromListener(const char from[], const char to[],
+		tf::StampedTransform &result);
 void detect();
 
 class SimpleDetector
 {
 private:
+	ros::NodeHandle n;
+	image_transport::ImageTransport it;
+
 	alvar::MarkerDetector<alvar::MarkerData> detector;
+	std::string cameraInfoTopic;
 	alvar::Camera cameraInfo;
 	cv::Mat lastImage;
 	image_transport::Subscriber imageSubscriber;
 
+	std::string cameraFrame;
+	std::string calibrationFrame;
+	tf::StampedTransform calibrationFrameToCameraFrame;
+
 	volatile bool callbackEnabled;
 	volatile bool detectionDone;
+
+	int imageHeight;
+	int imageWidth;
 public:
-	SimpleDetector(ros::NodeHandle &n, image_transport::ImageTransport &it, std::string cameraInfoTopic, std::string imageTopic):
-		cameraInfo(n, cameraInfoTopic),
-		imageSubscriber(it.subscribe(imageTopic, 1, &SimpleDetector::callback, this)),
-		callbackEnabled(false),
-		detectionDone(false)
+	SimpleDetector(std::string cameraInfoTopicParam, std::string imageTopic,
+			std::string cameraFrameParam, std::string calibrationFrameParam,
+			int imageHeightParam, int imageWidthParam) :
+			n(),
+			it(n),
+			cameraInfoTopic(cameraInfoTopicParam),
+			cameraInfo(n, cameraInfoTopicParam),
+			imageSubscriber(it.subscribe(imageTopic, 1, &SimpleDetector::callback, this)),
+			cameraFrame(cameraFrameParam),
+			calibrationFrame(calibrationFrameParam),
+			callbackEnabled(false),
+			detectionDone(false),
+			imageHeight(imageHeightParam),
+			imageWidth(imageWidthParam)
 	{
 		detector.SetMarkerSize(marker_size);
 	}
 
 	void callback(const sensor_msgs::ImageConstPtr & image_msg);
+	void startDetection();
+	void waitForDetectionToFinish();
 };
 
 int main(int argc, char *argv[])
@@ -75,13 +97,17 @@ int main(int argc, char *argv[])
 	std::string calibratedImageTopic = "/cameras/left_hand_camera/image";
 	std::string calibratedInfoTopic = "/cameras/left_hand_camera/camera_info";
 	std::string uncalibratedImageTopic = "/camera/rgb/image_raw";
+	std::string uncalibratedInfoTopic = "/camera/rgb/camera_info";
+	std::string uncalibratedCameraFrame = "camera_rgb_optical_frame";
+	std::string uncalibratedCameraCalibrationFrame = "camera_link";
 
 	image_transport::Subscriber calibratedSub_;
 	image_transport::Subscriber uncalibratedSub_;
 
 	pTransformListener = new tf::TransformListener(n);
 	pTransformBroadcaster = new tf::TransformBroadcaster();
-	pointCloudPublisher = n.advertise<sensor_msgs::PointCloud2>("calibration_debug_point_cloud", 1);
+	pointCloudPublisher = n.advertise<sensor_msgs::PointCloud2>(
+			"calibration_debug_point_cloud", 1);
 
 	// Give transform listener time to get some data.
 	ros::Duration(1.0).sleep();
@@ -90,17 +116,22 @@ int main(int argc, char *argv[])
 
 	image_transport::ImageTransport it_(n);
 	//Subscribe to topics and set up callbacks
+	SimpleDetector simpleDetector(uncalibratedInfoTopic, uncalibratedImageTopic, uncalibratedCameraFrame, uncalibratedCameraCalibrationFrame, 480, 640);
+	simpleDetector.startDetection();
+	simpleDetector.waitForDetectionToFinish();
+	/*
 	ROS_INFO_STREAM(
 			"Subscribing to calibrated image topic '" << calibratedImageTopic << "'");
 	calibratedSub_ = it_.subscribe(calibratedImageTopic, 1,
 			&calibratedCameraCallback);
-
+*/
 	/*
 	 ROS_INFO_STREAM(
 	 "Subscribing to uncalibrated image topic '" << uncalibratedImageTopic << "'");
 	 uncalibratedSub_ = it_.subscribe(uncalibratedImageTopic, 1,
 	 &getCapCallbackWithMonitor);
 	 */
+	/*
 	char done;
 	do
 	{
@@ -110,27 +141,32 @@ int main(int argc, char *argv[])
 		{
 			detect();
 		}
-	}
-	while (done != 'y');
+	} while (done != 'y');
 	while (ros::ok())
 	{
 		ros::Duration(0.1).sleep();
 	}
-
+	*/
 	delete pTransformListener;
 	delete pTransformBroadcaster;
 	return 0;
 }
 
-void calibratedCameraCallback(const sensor_msgs::ImageConstPtr & image_msg)
+void SimpleDetector::callback(const sensor_msgs::ImageConstPtr & image_msg)
 {
-	if (calibratedCameraCallbackEnabled)
+	if (callbackEnabled)
 	{
-		calibratedCameraCallbackEnabled = false;
+		if (detectionDone)
+		{
+			ROS_WARN("You forgot to clear the detectionDone flag!");
+			detectionDone = false;
+		}
+		callbackEnabled = false;
 
 		//If no camera info, return
-		if (!calibratedCam->getCamInfo_)
+		if (!cameraInfo.getCamInfo_)
 		{
+			ROS_WARN("No camera info on topic %s", cameraInfoTopic.c_str());
 			return;
 		}
 
@@ -147,24 +183,44 @@ void calibratedCameraCallback(const sensor_msgs::ImageConstPtr & image_msg)
 
 		//Get the estimated pose of the main markers by using all the markers in each bundle
 		IplImage ipl_image = cv_ptr_->image;
-		GetMultiMarkerPoses(&ipl_image);
-		calibratedCameraImage = cv_ptr_->image.clone();
+		detector.Detect(&ipl_image, &cameraInfo, true, true,
+				max_new_marker_error, max_track_error, alvar::CVSEQ, true);
+		lastImage = cv_ptr_->image.clone();
 
-		if (ipl_image.height != 800 || ipl_image.width != 1280)
+		if (ipl_image.height != imageHeight || ipl_image.width != imageWidth)
 		{
 			ROS_ERROR(
 					"Wrist camera image is incorrect size! Should be 1280x800. Shutting down.");
 			exit(1);
 		}
-		calibratedCameraDetectionDone = true;
+		detectionDone = true;
 	}
 }
 
-// Updates the bundlePoses of the multi_marker_bundles by detecting markers and using all markers in a bundle to infer the master tag's position
-void GetMultiMarkerPoses(IplImage *image)
+void SimpleDetector::startDetection()
 {
-	calibratedDetector.Detect(image, calibratedCam, true, true,
-			max_new_marker_error, max_track_error, alvar::CVSEQ, true);
+	bool transformIsRecent = getTransformFromListener(calibrationFrame.c_str(),
+			cameraFrame.c_str(), calibrationFrameToCameraFrame);
+	if (!transformIsRecent)
+	{
+		ROS_ERROR(
+				"Transform calibrated_camera->robot_link was not retrieved successfully");
+		return;
+	}
+	detectionDone = false;
+	callbackEnabled = true;
+}
+
+void SimpleDetector::waitForDetectionToFinish()
+{
+	do
+	{
+		ros::Duration(0.1).sleep();
+	}
+	while (!detectionDone);
+
+	cv::imshow("calibrated_camera_image", lastImage);
+	cv::waitKey(0);
 }
 
 void noncalibratedCameraCallback(const sensor_msgs::ImageConstPtr & image_msg)
@@ -199,14 +255,15 @@ void noncalibratedCameraCallback(const sensor_msgs::ImageConstPtr & image_msg)
 	}
 }
 
-
 void detect()
 {
 	tf::StampedTransform robotLinkToCalibratedCamera;
-	bool transformIsRecent = getTransformFromListener(robotLinkForCalibration, calibratedCameraFrame, robotLinkToCalibratedCamera);
+	bool transformIsRecent = getTransformFromListener(robotLinkForCalibration,
+			calibratedCameraFrame, robotLinkToCalibratedCamera);
 	if (!transformIsRecent)
 	{
-		ROS_ERROR("Transform calibrated_camera->robot_link was not retrieved successfully");
+		ROS_ERROR(
+				"Transform calibrated_camera->robot_link was not retrieved successfully");
 		return;
 	}
 
@@ -221,7 +278,6 @@ void detect()
 	cv::imshow("calibrated_camera_image", calibratedCameraImage);
 	cv::waitKey(0);
 
-
 	ROS_INFO("Detected markers: %d", calibratedDetector.markers->size());
 	for (int i = 0; i < calibratedDetector.markers->size(); i++)
 	{
@@ -231,7 +287,8 @@ void detect()
 				marker.pose.translation[2]);
 
 		tf::Transform cameraToMarker = getTransformFromPose(marker.pose);
-		tf::Transform robotLinkToMarker = robotLinkToCalibratedCamera * cameraToMarker;
+		tf::Transform robotLinkToMarker = robotLinkToCalibratedCamera
+				* cameraToMarker;
 
 		tf::Vector3 p1(-marker_size / 400.0, -marker_size / 400.0, 0.0);
 		tf::Vector3 p1InRobotLinkFrame = robotLinkToMarker * p1;
@@ -244,10 +301,18 @@ void detect()
 
 		pcl::PointCloud<pcl::PointXYZ> pointCloud;
 		sensor_msgs::PointCloud2 pointCloudRos;
-		pointCloud.push_back(pcl::PointXYZ(p1InRobotLinkFrame.x(), p1InRobotLinkFrame.y(), p1InRobotLinkFrame.z()));
-		pointCloud.push_back(pcl::PointXYZ(p2InRobotLinkFrame.x(), p2InRobotLinkFrame.y(), p2InRobotLinkFrame.z()));
-		pointCloud.push_back(pcl::PointXYZ(p3InRobotLinkFrame.x(), p3InRobotLinkFrame.y(), p3InRobotLinkFrame.z()));
-		pointCloud.push_back(pcl::PointXYZ(p4InRobotLinkFrame.x(), p4InRobotLinkFrame.y(), p4InRobotLinkFrame.z()));
+		pointCloud.push_back(
+				pcl::PointXYZ(p1InRobotLinkFrame.x(), p1InRobotLinkFrame.y(),
+						p1InRobotLinkFrame.z()));
+		pointCloud.push_back(
+				pcl::PointXYZ(p2InRobotLinkFrame.x(), p2InRobotLinkFrame.y(),
+						p2InRobotLinkFrame.z()));
+		pointCloud.push_back(
+				pcl::PointXYZ(p3InRobotLinkFrame.x(), p3InRobotLinkFrame.y(),
+						p3InRobotLinkFrame.z()));
+		pointCloud.push_back(
+				pcl::PointXYZ(p4InRobotLinkFrame.x(), p4InRobotLinkFrame.y(),
+						p4InRobotLinkFrame.z()));
 		pcl::toROSMsg(pointCloud, pointCloudRos);
 		pointCloudRos.header.frame_id = robotLinkForCalibration;
 		pointCloudRos.header.stamp = ros::Time::now();
@@ -256,12 +321,15 @@ void detect()
 		std::stringstream markerStr;
 		markerStr << "marker_" << marker.GetId();
 
-		tf::StampedTransform cameraToMarkerStamped(cameraToMarker, ros::Time::now(), calibratedCameraFrame, markerStr.str().c_str());
+		tf::StampedTransform cameraToMarkerStamped(cameraToMarker,
+				ros::Time::now(), calibratedCameraFrame,
+				markerStr.str().c_str());
 		pTransformBroadcaster->sendTransform(cameraToMarkerStamped);
 	}
 }
 
-bool getTransformFromListener(const char from[], const char to[], tf::StampedTransform &result)
+bool getTransformFromListener(const char from[], const char to[],
+		tf::StampedTransform &result)
 {
 	tf::TransformListener listener;
 	bool success = true;
