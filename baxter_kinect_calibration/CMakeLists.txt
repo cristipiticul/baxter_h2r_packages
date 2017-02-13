@@ -26,7 +26,8 @@ find_package(catkin REQUIRED
         resource_retriever
         message_generation
         ${MSG_DEPS}
-        dynamic_reconfigure)
+        dynamic_reconfigure
+        tf_conversions)
 
 find_package(Eigen REQUIRED)
 #find_package(Boost REQUIRED system filesystem)
@@ -55,7 +56,9 @@ catkin_package(DEPENDS
     geometry_msgs
     resource_retriever
     pcl_conversions
-    dynamic_reconfigure)
+    dynamic_reconfigure
+    tf_conversions
+    Eigen)
 
 
 include_directories(include
@@ -75,7 +78,7 @@ target_link_libraries(bundle_calibrate ar_track_alvar kinect_filtering medianFil
 add_dependencies(bundle_calibrate ${PROJECT_NAME}_gencpp ${GENCPP_DEPS})
 
 add_executable(calibrate_rgb_only src/calibrate_rgb_only.cpp)
-target_link_libraries(calibrate_rgb_only ar_track_alvar kinect_filtering medianFilter ${catkin_LIBRARIES})
+target_link_libraries(calibrate_rgb_only ar_track_alvar kinect_filtering medianFilter ${catkin_LIBRARIES} ${Eigen_LIBRARIES})
 add_dependencies(calibrate_rgb_only ${PROJECT_NAME}_gencpp ${GENCPP_DEPS})
 
 set(CALIBRATION_TARGETS bundle_calibrate)
