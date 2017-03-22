@@ -1,4 +1,4 @@
-To make and install
+Prerequisites
 -------------------
 
 If you haven't done already:
@@ -9,21 +9,25 @@ Install wstool
 sudo apt-get install python-wstool
 ```
 
-Create catkin workspace directory
+Create catkin workspace directory (skip this if you already have one)
 ```
 mkdir -p ~/catkin_ws/src
 ```
 
-This is installable via a rosinstall file. It requires access to the RethinkRobotics github repos.
+Download RethinkRobotics github repos (this assumes that your catkin workspace folder is ~/catkin_ws).
 ```
 cd ~/catkin_ws/src
 wstool init .
 wstool merge https://raw.githubusercontent.com/RethinkRobotics/baxter/master/baxter_sdk.rosinstall
-wstool merge https://raw.githubusercontent.com/cristipiticul/baxter_h2r_packages/indigo-devel/h2r.rosinstall
+wstool update
 ```
 
-Download all files:
+To make and install
+-------------------
+Download the repository:
 ```
+cd ~/catkin_ws/src
+wstool merge https://raw.githubusercontent.com/cristipiticul/baxter_h2r_packages/indigo-devel/h2r.rosinstall
 wstool update
 ```
 
