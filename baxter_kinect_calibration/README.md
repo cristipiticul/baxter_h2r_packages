@@ -5,7 +5,7 @@ Installation
 Unless you've installed baxter_h2r_packages according to its README, you will also need to get ar_track_alvar
 
 ```
-cd ~/baxter_ws/src
+cd ~/catkin_ws/src
 git clone -b hydro-devel https://github.com/sniekum/ar_track_alvar
 cd ..
 catkin_make

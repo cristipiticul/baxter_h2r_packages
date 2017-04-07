@@ -1,0 +1,12 @@
+<launch>
+    <arg name="hand"/> <!-- left or right -->
+    <arg name="image_topic" default="/cameras/$(arg hand)_hand_camera/image"/>
+    <arg name="info_topic" default="/cameras/$(arg hand)_hand_camera/camera_info"/>
+    <arg name="camera_optical_frame" default="$(arg hand)_hand_camera"/>
+    <arg name="image_height" default="800"/>
+    <arg name="image_width" default="1280"/>
+    <arg name="marker_size"/>
+    <node name="marker_detector" pkg="baxter_kinect_calibration" 
+        type="marker_detector" output="screen"
+        args="$(arg image_topic) $(arg info_topic) $(arg camera_optical_frame) $(arg image_height) $(arg image_width) $(arg marker_size)"/>
+</launch>

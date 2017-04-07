@@ -1,0 +1,11 @@
+<launch>
+    <arg name="image_topic" default="/camera/rgb/image_rect_color"/>
+    <arg name="info_topic" default="/camera/rgb/camera_info"/>
+    <arg name="camera_optical_frame" default="camera_rgb_optical_frame"/>
+    <arg name="image_height" default="480"/>
+    <arg name="image_width" default="640"/>
+    <arg name="marker_size"/>
+    <node name="marker_detector" pkg="baxter_kinect_calibration" 
+        type="marker_detector" output="screen"
+        args="$(arg image_topic) $(arg info_topic) $(arg camera_optical_frame) $(arg image_height) $(arg image_width) $(arg marker_size)"/>
+</launch>

@@ -23,33 +23,33 @@ typedef std::vector<alvar::MarkerData, Eigen::aligned_allocator<alvar::MarkerDat
 typedef pcl::PointXYZ PointType;
 typedef pcl::PointCloud<PointType> PointCloud;
 
-const char CALIBRATED_IMAGE_TOPIC[] = "/cameras/left_hand_camera/image";
-const char CALIBRATED_INFO_TOPIC[] = "/cameras/left_hand_camera/camera_info";
-const char CALIBRATED_CAMERA_FRAME[] = "left_hand_camera";
-/** For wrist support
-const char CALIBRATED_CAMERA_CALIBRATION_FRAME[] = "left_wrist";
-*/
-/** For static camera (not attached to the robot */
+const char CALIBRATED_IMAGE_TOPIC[] = "/cameras/right_hand_camera/image";
+const char CALIBRATED_INFO_TOPIC[] = "/cameras/right_hand_camera/camera_info";
+const char CALIBRATED_CAMERA_FRAME[] = "right_hand_camera";
+/** For wrist support */
+const char CALIBRATED_CAMERA_CALIBRATION_FRAME[] = "right_wrist";
+/** For static camera (not attached to the robot
 const char CALIBRATED_CAMERA_CALIBRATION_FRAME[] = "base";
-
+*/
 /* For Asus Xtion
-const char UNCALIBRATED_IMAGE_TOPIC[] = "/camera/rgb/image_raw";
+const char UNCALIBRATED_IMAGE_TOPIC[] = "/camera/rgb/image_rect_color";
 const char UNCALIBRATED_INFO_TOPIC[] = "/camera/rgb/camera_info";
+const char UNCALIBRATED_CAMERA_FRAME[] = "camera_rgb_optical_frame";
+const char UNCALIBRATED_CAMERA_CALIBRATION_FRAME[] = "camera_link";
 const int UNCALIBRATED_CAMERA_HEIGHT = 480;
 const int UNCALIBRATED_CAMERA_WIDTH = 640;
 */
 /* For Kinect2 */
-const char UNCALIBRATED_IMAGE_TOPIC[] = "/camera/hd/image_color";
-const char UNCALIBRATED_INFO_TOPIC[] = "/camera/hd/camera_info";
-const char UNCALIBRATED_CAMERA_FRAME[] = "camera_rgb_optical_frame";
-const char UNCALIBRATED_CAMERA_CALIBRATION_FRAME[] = "camera_link";
+const char UNCALIBRATED_IMAGE_TOPIC[] = "/kinect2/hd/image_color";
+const char UNCALIBRATED_INFO_TOPIC[] = "/kinect2/hd/camera_info";
+const char UNCALIBRATED_CAMERA_FRAME[] = "kinect2_rgb_optical_frame";
+const char UNCALIBRATED_CAMERA_CALIBRATION_FRAME[] = "kinect2_link";
 const int UNCALIBRATED_CAMERA_HEIGHT = 1080;
 const int UNCALIBRATED_CAMERA_WIDTH = 1920;
 
-
 double max_new_marker_error = 0.08; // same value as in ar_track_alvar/launch/pr2_indiv_no_kinect.launch
 double max_track_error = 0.2; // same value as in ar_track_alvar/launch/pr2_indiv_no_kinect.launch
-double marker_size = 14.4;
+double marker_size = 7.7;
 
 ros::Publisher pointCloudPublisher;
 
@@ -69,9 +69,9 @@ private:
 	std::string imageTopic;
 	alvar::Camera cameraInfo;
 	cv::Mat lastImage;
+	boost::mutex lastImageMutex;
 	image_transport::Subscriber imageSubscriber;
 
-	volatile bool callbackEnabled;
 	volatile bool detectionDone;
 
 	// Used to flip the image from camera (by 180 degrees).
@@ -89,7 +89,6 @@ public:
 			imageTopic(imageTopicParam),
 			cameraInfo(n, cameraInfoTopicParam),
 			imageSubscriber(),
-			callbackEnabled(false),
 			detectionDone(false),
 			imageHeight(imageHeightParam),
 			imageWidth(imageWidthParam),
@@ -178,6 +177,8 @@ public:
 			tf::StampedTransform &result);
 	bool calibrationReady();
 	tf::StampedTransform getCurrentCalibration();
+	cv::Mat getLastImageFromCalibratedCamera();
+	cv::Mat getLastImageFromUncalibratedCamera();
 
 	~Calibrator()
 	{
@@ -204,6 +205,19 @@ int main(int argc, char *argv[])
 
 	while (ros::ok())
 	{
+		cv::Mat lastImageCalibrated = calibrator.getLastImageFromCalibratedCamera();
+		cv::Mat lastImageUncalibrated = calibrator.getLastImageFromUncalibratedCamera();
+		if (!lastImageCalibrated.empty())
+		{
+			cv::imshow("calibrated_camera_image",
+					calibrator.getLastImageFromCalibratedCamera());
+		}
+		if (!lastImageUncalibrated.empty())
+		{
+			cv::imshow("uncalibrated_camera_image",
+					calibrator.getLastImageFromUncalibratedCamera());
+		}
+		cv::waitKey(30);
 		if (calibrator.calibrationReady())
 		{
 			pTransformBroadcaster->sendTransform(calibrator.getCurrentCalibration());
@@ -219,58 +233,55 @@ void SimpleDetector::callback(const sensor_msgs::ImageConstPtr & image_msg)
 {
 	ROS_INFO("CALLBACK!!! %s", imageTopic.c_str());
 	imageSubscriber.shutdown();
-	if (callbackEnabled)
+	if (detectionDone)
 	{
-		if (detectionDone)
-		{
-			ROS_WARN("You forgot to clear the detectionDone flag!");
-			detectionDone = false;
-		}
-		callbackEnabled = false;
-
-		//If no camera info, return
-		if (!cameraInfo.getCamInfo_)
-		{
-			ROS_WARN("No camera info on topic %s", cameraInfoTopic.c_str());
-			return;
-		}
-
-		cv_bridge::CvImagePtr cv_ptr_;
-		try
-		{
-			cv_ptr_ = cv_bridge::toCvCopy(image_msg,
-					sensor_msgs::image_encodings::BGR8);
-		} catch (cv_bridge::Exception& e)
-		{
-			ROS_ERROR("Could not convert from '%s' to 'rgb8'.",
-					image_msg->encoding.c_str());
-		}
-
-		//Get the estimated pose of the main markers by using all the markers in each bundle
-		cv::Mat& image = cv_ptr_->image;
-		if (flipImages)
-		{
-			cv::flip(image, image, -1);
-		}
-		IplImage ipl_image = cv_ptr_->image;
-		detector.Detect(&ipl_image, &cameraInfo, true, true,
-				max_new_marker_error, max_track_error, alvar::CVSEQ, true);
-		lastImage = cv_ptr_->image.clone();
-
-		if (ipl_image.height != imageHeight || ipl_image.width != imageWidth)
-		{
-			ROS_ERROR(
-					"Wrist camera image is incorrect size! Should be 1280x800. Shutting down.");
-			exit(1);
-		}
-		detectionDone = true;
+		ROS_WARN("You forgot to clear the detectionDone flag!");
+		detectionDone = false;
 	}
+
+	//If no camera info, return
+	if (!cameraInfo.getCamInfo_)
+	{
+		ROS_WARN("No camera info on topic %s", cameraInfoTopic.c_str());
+		return;
+	}
+
+	cv_bridge::CvImagePtr cv_ptr_;
+	try
+	{
+		cv_ptr_ = cv_bridge::toCvCopy(image_msg,
+				sensor_msgs::image_encodings::BGR8);
+	} catch (cv_bridge::Exception& e)
+	{
+		ROS_ERROR("Could not convert from '%s' to 'rgb8'.",
+				image_msg->encoding.c_str());
+	}
+
+	//Get the estimated pose of the main markers by using all the markers in each bundle
+	cv::Mat& image = cv_ptr_->image;
+	if (flipImages)
+	{
+		cv::flip(image, image, -1);
+	}
+	IplImage ipl_image = cv_ptr_->image;
+	detector.Detect(&ipl_image, &cameraInfo, true, true,
+			max_new_marker_error, max_track_error, alvar::CVSEQ, true);
+	lastImageMutex.lock();
+	lastImage = cv_ptr_->image.clone();
+	lastImageMutex.unlock();
+
+	if (ipl_image.height != imageHeight || ipl_image.width != imageWidth)
+	{
+		ROS_ERROR(
+				"Wrist camera image is incorrect size! Should be 1280x800. Shutting down.");
+		exit(1);
+	}
+	detectionDone = true;
 }
 
 void SimpleDetector::startDetection()
 {
 	detectionDone = false;
-	callbackEnabled = true;
 	imageSubscriber = it.subscribe(imageTopic, 1, &SimpleDetector::callback, this);
 }
 
@@ -286,7 +297,11 @@ void SimpleDetector::waitForDetectionToFinish()
 
 cv::Mat SimpleDetector::getLastImage()
 {
-	return lastImage;
+	cv::Mat result;
+	lastImageMutex.lock();
+	result = lastImage.clone();
+	lastImageMutex.unlock();
+	return result;
 }
 
 MarkerVector* SimpleDetector::getDetectedMarkers()
@@ -396,10 +411,6 @@ bool Calibrator::updateCalibration(std_srvs::Empty::Request &req, std_srvs::Empt
 
 	printStaticTransformCommand(currentCalibration);
 
-	cv::imshow("calibrated_camera_image", calibratedCameraDetector.getLastImage());
-	cv::imshow("uncalibrated_camera_image", uncalibratedCameraDetector.getLastImage());
-	cv::waitKey(0);
-
 	return true;
 }
 
@@ -434,6 +445,15 @@ tf::StampedTransform Calibrator::getCurrentCalibration()
 	currentCalibrationMutex.unlock();
 	result.stamp_ = ros::Time::now();
 	return result;
+}
+
+cv::Mat Calibrator::getLastImageFromCalibratedCamera()
+{
+	return calibratedCameraDetector.getLastImage();
+}
+cv::Mat Calibrator::getLastImageFromUncalibratedCamera()
+{
+	return uncalibratedCameraDetector.getLastImage();
 }
 
 tf::Transform getTransformFromPose(alvar::Pose &p)
