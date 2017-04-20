@@ -20,8 +20,9 @@
 #include <std_srvs/Empty.h>
 
 typedef std::vector<alvar::MarkerData, Eigen::aligned_allocator<alvar::MarkerData> > MarkerVector;
-//typedef pcl::PointXYZ PointType;
-//typedef pcl::PointCloud<PointType> PointCloud;
+
+#define MARKER_DETECTION_ENABLE_SERVICE_NAME "enable_marker_detection"
+#define MARKER_DETECTION_DISABLE_SERVICE_NAME "disable_marker_detection"
 
 std::string image_topic;
 std::string info_topic;
@@ -32,8 +33,6 @@ int image_width;
 double max_new_marker_error = 0.08; // same value as in ar_track_alvar/launch/pr2_indiv_no_kinect.launch
 double max_track_error = 0.2; // same value as in ar_track_alvar/launch/pr2_indiv_no_kinect.launch
 double marker_size;
-
-ros::Publisher pointCloudPublisher;
 
 tf::Transform getTransformFromPose(alvar::Pose &p);
 void printStaticTransformCommand(tf::StampedTransform transform);
@@ -48,13 +47,15 @@ private:
 	alvar::MarkerDetector<alvar::MarkerData> detector;
 	std::string cameraInfoTopic;
 	std::string imageTopic;
-	alvar::Camera cameraInfo;
-	cv::Mat lastImage;
-	boost::mutex lastImageMutex;
+	alvar::Camera* pCameraInfo;
 	image_transport::Subscriber imageSubscriber;
 
-	volatile bool detectionDone;
-	volatile bool enabled;
+	tf::TransformBroadcaster transformBroadcaster;
+
+	ros::Rate sleepRate; //TODO: parametrize this
+
+	ros::ServiceServer startService;
+	ros::ServiceServer stopService;
 
 	int imageHeight;
 	int imageWidth;
@@ -63,23 +64,27 @@ public:
 			int imageHeightParam, int imageWidthParam) :
 			n(),
 			it(n),
+			pCameraInfo(NULL),
 			cameraInfoTopic(cameraInfoTopicParam),
 			imageTopic(imageTopicParam),
-			cameraInfo(n, cameraInfoTopicParam),
-			imageSubscriber(it.subscribe(imageTopic, 1, &SimpleDetector::callback, this)),
-			detectionDone(false),
 			imageHeight(imageHeightParam),
 			imageWidth(imageWidthParam),
-			enabled(false)
+			sleepRate(10.0)
 	{
 		detector.SetMarkerSize(marker_size);
+		startService = n.advertiseService(MARKER_DETECTION_ENABLE_SERVICE_NAME,
+				&SimpleDetector::start, this);
+		stopService = n.advertiseService(MARKER_DETECTION_DISABLE_SERVICE_NAME,
+				&SimpleDetector::stop, this);
 	}
 
 	void callback(const sensor_msgs::ImageConstPtr & image_msg);
-	void startDetection();
+	bool start(std_srvs::EmptyRequest& req, std_srvs::EmptyResponse& resp);
+	bool stop(std_srvs::EmptyRequest& req, std_srvs::EmptyResponse& resp);
 	void waitForDetectionToFinish();
-	cv::Mat getLastImage();
 	MarkerVector* getDetectedMarkers();
+
+	~SimpleDetector();
 };
 
 void usage(char* program_name)
@@ -114,118 +119,86 @@ int main(int argc, char *argv[])
 	std::cout << "expected image width: " << image_width << '\n';
 
 	ros::NodeHandle n;
-	tf::TransformBroadcaster* pTransformBroadcaster(new tf::TransformBroadcaster());
-	ros::AsyncSpinner spinner(1);
-	spinner.start();
 
 	SimpleDetector detector(info_topic, image_topic,
 			image_height, image_width);
 
-	ros::Duration(1.0).sleep(); // Give the spinner time to get the cameras' info
-
-	ros::Rate sleepRate(10.0); //TODO: parametrize this
-
-	while (ros::ok())
-	{
-		detector.startDetection();
-		detector.waitForDetectionToFinish();
-		cv::imshow("uncalibrated_camera_image",
-				detector.getLastImage());
-		cv::waitKey(30);
-
-		MarkerVector* detectedMarkers = detector.getDetectedMarkers();
-		for (int i = 0; i < detectedMarkers->size(); i++)
-		{
-			std::stringstream str;
-			str << "marker_" << detectedMarkers->at(i).GetId();
-			tf::StampedTransform transform(getTransformFromPose(detectedMarkers->at(i).pose), ros::Time::now(), camera_optical_frame, str.str());
-			pTransformBroadcaster->sendTransform(transform);
-			std::cout << "Found marker " << str.str() << '\n';
-		}
-		sleepRate.sleep();
-	}
-	delete pTransformBroadcaster;
+	ros::spin();
 
 	return 0;
 }
 
 void SimpleDetector::callback(const sensor_msgs::ImageConstPtr & image_msg)
 {
-	//imageSubscriber.shutdown();
-	if (enabled)
+	//If no camera info, return
+	if (pCameraInfo == NULL || !pCameraInfo->getCamInfo_)
 	{
-		enabled = false;
-		if (detectionDone)
-		{
-			ROS_WARN("You forgot to clear the detectionDone flag!");
-			detectionDone = false;
-		}
-
-		//If no camera info, return
-		if (!cameraInfo.getCamInfo_)
-		{
-			ROS_WARN("No camera info on topic %s", cameraInfoTopic.c_str());
-			return;
-		}
-
-		cv_bridge::CvImagePtr cv_ptr_;
-		try
-		{
-			cv_ptr_ = cv_bridge::toCvCopy(image_msg,
-					sensor_msgs::image_encodings::BGR8);
-		} catch (cv_bridge::Exception& e)
-		{
-			ROS_ERROR("Could not convert from '%s' to 'rgb8'.",
-					image_msg->encoding.c_str());
-		}
-
-		//Get the estimated pose of the main markers by using all the markers in each bundle
-		cv::Mat& image = cv_ptr_->image;
-		IplImage ipl_image = cv_ptr_->image;
-		detector.Detect(&ipl_image, &cameraInfo, true, true,
-				max_new_marker_error, max_track_error, alvar::CVSEQ, true);
-		lastImageMutex.lock();
-		lastImage = cv_ptr_->image.clone();
-		lastImageMutex.unlock();
-
-		if (ipl_image.height != imageHeight || ipl_image.width != imageWidth)
-		{
-			ROS_ERROR(
-					"Wrist camera image is incorrect size! Should be %dx%d. Shutting down.", imageWidth, imageHeight);
-			exit(1);
-		}
-		detectionDone = true;
+		ROS_WARN("No camera info on topic %s", cameraInfoTopic.c_str());
+		return;
 	}
-}
 
-void SimpleDetector::startDetection()
-{
-	detectionDone = false;
-	enabled = true;
-}
-
-void SimpleDetector::waitForDetectionToFinish()
-{
-	do
+	cv_bridge::CvImagePtr cv_ptr_;
+	try
 	{
-		ros::spinOnce(); // Without this, the topics' callbacks would not be called during the service call. IDK why..
-		ros::Duration(0.1).sleep();
+		cv_ptr_ = cv_bridge::toCvCopy(image_msg,
+				sensor_msgs::image_encodings::BGR8);
+	} catch (cv_bridge::Exception& e)
+	{
+		ROS_ERROR("Could not convert from '%s' to 'rgb8'.",
+				image_msg->encoding.c_str());
 	}
-	while (!detectionDone);
+
+	//Get the estimated pose of the main markers by using all the markers in each bundle
+	cv::Mat& image = cv_ptr_->image;
+	IplImage ipl_image = cv_ptr_->image;
+	detector.Detect(&ipl_image, pCameraInfo, true, true,
+			max_new_marker_error, max_track_error, alvar::CVSEQ, true);
+
+	MarkerVector* detectedMarkers = detector.markers;
+	for (int i = 0; i < detector.markers->size(); i++)
+	{
+		std::stringstream str;
+		str << "marker_" << detectedMarkers->at(i).GetId();
+		tf::StampedTransform transform(getTransformFromPose(detectedMarkers->at(i).pose), ros::Time::now(), camera_optical_frame, str.str());
+		transformBroadcaster.sendTransform(transform);
+		std::cout << "Found marker " << str.str() << '\n';
+	}
+
+	if (ipl_image.height != imageHeight || ipl_image.width != imageWidth)
+	{
+		ROS_ERROR(
+				"Wrist camera image is incorrect size! Should be %dx%d. Shutting down.", imageWidth, imageHeight);
+		exit(1);
+	}
+
+	sleepRate.sleep();
 }
 
-cv::Mat SimpleDetector::getLastImage()
+
+bool SimpleDetector::start(std_srvs::EmptyRequest& req, std_srvs::EmptyResponse& resp)
 {
-	cv::Mat result;
-	lastImageMutex.lock();
-	result = lastImage.clone();
-	lastImageMutex.unlock();
-	return result;
+	/**
+	 * TODO: Camera info will never be set if:
+	 * - cameraInfo is initialized in the constructor and
+	 * - the cameraInfo publisher is started after this node
+	 */
+	if (pCameraInfo == NULL)
+	{
+		pCameraInfo = new alvar::Camera(n, cameraInfoTopic);
+	}
+	imageSubscriber = it.subscribe(imageTopic, 1, &SimpleDetector::callback, this);
+	return true;
 }
 
-MarkerVector* SimpleDetector::getDetectedMarkers()
+bool SimpleDetector::stop(std_srvs::EmptyRequest& req, std_srvs::EmptyResponse& resp)
 {
-	return detector.markers;
+	imageSubscriber.shutdown();
+	return true;
+}
+
+SimpleDetector::~SimpleDetector()
+{
+	delete pCameraInfo;
 }
 
 tf::Transform getTransformFromPose(alvar::Pose &p)
