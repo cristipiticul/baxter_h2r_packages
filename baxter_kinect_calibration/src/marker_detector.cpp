@@ -111,6 +111,7 @@ int main(int argc, char *argv[])
 		return 1;
 	}
 
+	std::cout << "Marker detector:" << '\n';
 	std::cout << "image topic: " << image_topic << '\n';
 	std::cout << "info topic: " << info_topic << '\n';
 	std::cout << "camera frame: " << camera_optical_frame << '\n';
@@ -161,7 +162,7 @@ void SimpleDetector::callback(const sensor_msgs::ImageConstPtr & image_msg)
 		str << "marker_" << detectedMarkers->at(i).GetId();
 		tf::StampedTransform transform(getTransformFromPose(detectedMarkers->at(i).pose), ros::Time::now(), camera_optical_frame, str.str());
 		transformBroadcaster.sendTransform(transform);
-		std::cout << "Found marker " << str.str() << '\n';
+		//std::cout << "Found marker " << str.str() << '\n';
 	}
 
 	if (ipl_image.height != imageHeight || ipl_image.width != imageWidth)
